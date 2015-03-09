@@ -1,12 +1,15 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
-	"os"
-	"io"
-	"log"
+	"fmt"
 	"html/template"
-	"time"
+	"io"
+	"io/ioutil"
+	"log"
+	"net/http"
+	"os"
 
 	"github.com/kardianos/service"
 )
@@ -31,25 +34,75 @@ func (p *program) Start(s service.Service) error {
 	go p.run()
 	return nil
 }
+
 func (p *program) run() error {
 	logger.Infof("I'm running %v.", service.Platform())
-	ticker := time.NewTicker(2 * time.Second)
-	for {
-		select {
-		case tm := <-ticker.C:
-			logger.Infof("Still running at %v...", tm)
-		case <-p.exit:
-			ticker.Stop()
-			return nil
-		}
-	}
+	httpServer()
 	return nil
 }
+
 func (p *program) Stop(s service.Service) error {
 	// Any work in Stop should be quick, usually a few seconds at most.
 	logger.Info("I'm Stopping!")
 	close(p.exit)
 	return nil
+}
+
+func httpServer() {
+	http.HandleFunc("/token", TokenHandle)
+	if err := http.ListenAndServe(":3000", nil); err != nil {
+		logger.Error(err.Error())
+		panic(err.Error())
+	}
+}
+
+func TokenHandle(w http.ResponseWriter, req *http.Request) {
+	var rsp Rsp
+	if req.Method == "POST" {
+		str, err := ioutil.ReadAll(req.Body)
+		if err != nil {
+			logger.Info(err.Error())
+			rsp.Code = "100"
+			rsp.Msg = "系统错误"
+		}
+		fmt.Println(string(str))
+		user := new(User)
+		if err := json.Unmarshal(str, user); err != nil {
+			logger.Info(err.Error())
+			rsp.Code = "201"
+			rsp.Msg = "数据解析错误"
+		} else {
+			if user.Username == "admin" && user.Password == "123456" {
+				rsp.Code = "200"
+				rsp.Msg = "登录成功"
+			} else {
+				rsp.Code = "202"
+				rsp.Msg = "用户名或密码错误"
+			}
+		}
+
+	} else {
+		rsp.Code = "203"
+		rsp.Msg = "请使用post访问"
+	}
+
+	if ss, err := json.Marshal(rsp); err != nil {
+		logger.Error(err.Error())
+		panic(err.Error())
+	} else {
+		io.WriteString(w, string(ss))
+	}
+}
+
+type User struct {
+	Username string
+	Password string
+}
+
+type Rsp struct {
+	Code   string
+	Msg    string
+	Object interface{}
 }
 
 // Service setup.
@@ -102,7 +155,6 @@ func main() {
 		logger.Error(err)
 	}
 }
-
 
 const usageTemplate = `usage: daemon command [arguments]
 
