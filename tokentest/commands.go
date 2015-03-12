@@ -147,15 +147,14 @@ func (c *DaemonCli) CmdLogin(args ...string) error {
 	} else if n <= 0 {
 		return fmt.Errorf("user is empty")
 	}
-	data["username"] = strings.Trim(string(buf), "\n\t")
+	data["username"] = string(buf[:strings.Index(string(buf), "\r\n")])
 	fmt.Fprint(c.out, "\n password :")
 	if n, err := c.in.Read(buf); err != nil {
 		return err
 	} else if n <= 0 {
 		return fmt.Errorf("passwd is empty")
 	}
-	fmt.Println(len(data["username"]))
-	data["password"] = strings.Trim(string(buf), "\n\t")
+	data["password"] = string(buf[:strings.Index(string(buf), "\r\n")])
 	in, err := c.encodeData(data)
 	if err != nil {
 		return err
