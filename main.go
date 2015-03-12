@@ -14,7 +14,13 @@ import (
 	"github.com/kardianos/service"
 )
 
+const (
+	addr   = ":3000"
+	vesion = "1.0"
+)
+
 var logger service.Logger
+var flTls *bool = flag.Bool("-tls", false, "enable tls mode")
 
 // Program structures.
 //  Define Start and Stop methods.
@@ -49,8 +55,14 @@ func (p *program) Stop(s service.Service) error {
 }
 
 func httpServer() {
-	http.HandleFunc("/token", TokenHandle)
-	if err := http.ListenAndServe(":3000", nil); err != nil {
+	http.HandleFunc(fmt.Sprintf("/v%s/token", vesion), TokenHandle)
+	var err error
+	if *flTls {
+		err = http.ListenAndServeTLS(addr, "cert.pem", "key.pem", nil)
+	} else {
+		err = http.ListenAndServe(addr, nil)
+	}
+	if err != nil {
 		logger.Error(err.Error())
 		panic(err.Error())
 	}
