@@ -109,6 +109,9 @@ func main() {
 		*flHost = addr
 	}
 	cli := NewDaemonCli()
+	if *flTls {
+		cli.scheme = "https"
+	}
 	if err := cli.Cmd(flag.Args()...); err != nil {
 		fmt.Fprint(cli.err, err.Error())
 	}

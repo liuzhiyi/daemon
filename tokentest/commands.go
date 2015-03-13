@@ -161,3 +161,20 @@ func (c *DaemonCli) CmdLogin(args ...string) error {
 	}
 	return c.stream("POST", "/token", in, c.out, c.err, nil)
 }
+
+func (c *DaemonCli) CmdReset(args ...string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("Not enough parameters")
+	}
+	data := make(map[string]string)
+	data["password"] = args[0]
+	in, err := c.encodeData(data)
+	if err != nil {
+		return err
+	}
+	return c.stream("POST", "/reset", in, c.out, c.err, nil)
+}
+
+func (c *DaemonCli) CmdWelcome(args ...string) error {
+	return c.stream("GET", "/welcome", nil, c.out, c.err, nil)
+}

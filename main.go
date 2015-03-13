@@ -4,19 +4,22 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"html/template"
 	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
-	"os"
+	"path"
+	"time"
 
 	"github.com/kardianos/service"
 )
 
 const (
-	addr   = ":3000"
-	vesion = "1.0"
+	addr                            = ":3000"
+	vesion                          = "1.0"
+	defaultExpiration time.Duration = 60 * 60 * time.Second
+	cachePath         string        = "/cache"
+	sessionName                     = "SESSIONID"
 )
 
 var logger service.Logger
@@ -37,13 +40,13 @@ func (p *program) Start(s service.Service) error {
 	p.exit = make(chan struct{})
 
 	// Start should not block. Do the actual work async.
-	go p.run()
+	go p.run(s)
 	return nil
 }
 
-func (p *program) run() error {
+func (p *program) run(s service.Service) error {
 	logger.Infof("I'm running %v.", service.Platform())
-	httpServer()
+	httpServer(s)
 	return nil
 }
 
@@ -54,13 +57,13 @@ func (p *program) Stop(s service.Service) error {
 	return nil
 }
 
-func httpServer() {
-	http.HandleFunc(fmt.Sprintf("/v%s/token", vesion), TokenHandle)
+func httpServer(s service.Service) {
+	r := createRouters(s)
 	var err error
 	if *flTls {
-		err = http.ListenAndServeTLS(addr, "cert.pem", "key.pem", nil)
+		err = http.ListenAndServeTLS(addr, "cert.pem", "key.pem", r)
 	} else {
-		err = http.ListenAndServe(addr, nil)
+		err = http.ListenAndServe(addr, r)
 	}
 	if err != nil {
 		logger.Error(err.Error())
@@ -68,37 +71,152 @@ func httpServer() {
 	}
 }
 
-func TokenHandle(w http.ResponseWriter, req *http.Request) {
-	var rsp Rsp
-	if req.Method == "POST" {
-		str, err := ioutil.ReadAll(req.Body)
-		if err != nil {
-			logger.Info(err.Error())
-			rsp.Code = "100"
-			rsp.Msg = "系统错误"
-		}
-		fmt.Println(string(str))
-		user := new(User)
-		if err := json.Unmarshal(str, user); err != nil {
-			logger.Info(err.Error())
-			rsp.Code = "201"
-			rsp.Msg = "数据解析错误"
-		} else {
-			if user.Username == "admin" && user.Password == "123456" {
-				rsp.Code = "200"
-				rsp.Msg = "登录成功"
-			} else {
-				rsp.Code = "202"
-				rsp.Msg = "用户名或密码错误"
+type httpHandler func(service.Service, http.ResponseWriter, *http.Request, *Session)
+
+type route struct {
+	method string
+	path   string
+	fn     http.Handler
+}
+
+func (r *route) match(path string) bool {
+	fmt.Println(path, r.path)
+	return r.path == path
+}
+
+type Router struct {
+	routes []*route
+}
+
+func newRouter() *Router {
+	return &Router{}
+}
+
+func (r *Router) newRoute() *route {
+	route := &route{}
+	r.routes = append(r.routes, route)
+	return route
+}
+
+func (r *Router) HandleFunc(s service.Service, method string, path string, handler httpHandler) {
+	route := r.newRoute()
+	route.method = method
+	route.path = fmt.Sprintf("/v%s%s", vesion, path)
+	route.fn = r.makeHttpFnc(s, handler)
+}
+
+func (r *Router) makeHttpFnc(s service.Service, handler httpHandler) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		session := sessionStart(w, req)
+		handler(s, w, req, session)
+	}
+}
+
+func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	if p := cleanPath(req.URL.Path); p != req.URL.Path {
+		sessionStart(w, req)
+		url := *req.URL
+		url.Path = p
+		p = url.String()
+
+		w.Header().Set("Location", p)
+		w.WriteHeader(http.StatusMovedPermanently)
+		return
+	}
+	var handler http.Handler
+	for _, route := range r.routes {
+		if req.Method == route.method {
+			if route.match(req.URL.Path) {
+				handler = route.fn
 			}
 		}
-
-	} else {
-		rsp.Code = "203"
-		rsp.Msg = "请使用post访问"
+	}
+	if handler == nil {
+		handler = http.NotFoundHandler()
 	}
 
-	if ss, err := json.Marshal(rsp); err != nil {
+	handler.ServeHTTP(w, req)
+}
+
+func createRouters(s service.Service) *Router {
+	r := newRouter()
+	m := map[string]map[string]httpHandler{
+		"POST": {
+			"/token": TokenHandle,
+			"/reset": Reset,
+		},
+		"GET": {
+			"/welcome": Welcome,
+		},
+	}
+
+	for method, routers := range m {
+		for router, handler := range routers {
+			r.HandleFunc(s, method, router, handler)
+		}
+	}
+	return r
+}
+
+func Welcome(s service.Service, w http.ResponseWriter, req *http.Request, session *Session) {
+	var data Rsp
+	data.Code = "200"
+	data.Msg = "访问成功"
+	data.Object = "服务器版本：1.0，欢迎使用daemon服务。"
+	output(w, data)
+}
+
+func Reset(s service.Service, w http.ResponseWriter, req *http.Request, session *Session) {
+	data, params := decodeData(req)
+	if _, logined := session.container["username"]; logined {
+		password, ok := params["password"]
+		if ok {
+			if password == "123456" {
+				if err := s.Restart(); err != nil {
+					logger.Errorf("restart failed:%s", err.Error())
+					data.Code = "202"
+					data.Msg = "密码不正确"
+				} else {
+					logger.Info("restart success")
+					data.Code = "200"
+					data.Msg = "服务器重启成功"
+				}
+			}
+		} else if data.Code == "" {
+			data.Code = "301"
+			data.Msg = "参数不正确"
+		}
+	} else {
+		data.Code = "207"
+		data.Code = "请登录"
+	}
+	output(w, data)
+}
+
+func decodeData(req *http.Request) (Rsp, map[string]string) {
+	var data Rsp
+	params := make(map[string]string)
+	str, err := ioutil.ReadAll(req.Body)
+	if err != nil {
+		logger.Info(err.Error())
+		data.Code = "100"
+		data.Msg = "系统错误"
+		return data, params
+	}
+
+	if err := json.Unmarshal(str, &params); err != nil {
+		logger.Info(err.Error())
+		data.Code = "201"
+		data.Msg = "数据解析错误"
+		return data, params
+	}
+	return data, params
+}
+
+func output(w http.ResponseWriter, data Rsp) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	if ss, err := json.Marshal(data); err != nil {
 		logger.Error(err.Error())
 		panic(err.Error())
 	} else {
@@ -106,9 +224,42 @@ func TokenHandle(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
-type User struct {
-	Username string
-	Password string
+func TokenHandle(s service.Service, w http.ResponseWriter, req *http.Request, session *Session) {
+	data, params := decodeData(req)
+	var username, password string
+	var ok bool
+	username, ok = params["username"]
+	password, ok = params["password"]
+	if ok {
+		if username == "admin" && password == "123456" {
+			data.Code = "200"
+			data.Msg = "登录成功"
+			session.set("username", username)
+		} else {
+			data.Code = "202"
+			data.Msg = "用户名或密码错误"
+		}
+	} else if data.Code == "" {
+		data.Code = "301"
+		data.Msg = "参数不正确"
+	}
+	output(w, data)
+}
+
+func cleanPath(p string) string {
+	if p == "" {
+		return "/"
+	}
+	if p[0] != '/' {
+		p = "/" + p
+	}
+	np := path.Clean(p)
+	// path.Clean removes trailing slash except for root;
+	// put the trailing slash back if necessary.
+	if p[len(p)-1] == '/' && np != "/" {
+		np += "/"
+	}
+	return np
 }
 
 type Rsp struct {
@@ -162,41 +313,9 @@ func main() {
 		}
 		return
 	}
+
 	err = s.Run()
 	if err != nil {
 		logger.Error(err)
-	}
-}
-
-const usageTemplate = `usage: daemon command [arguments]
-
-The commands are:
-{{range .}}
-    {{.Name | printf "%-11s"}} {{.Short}}{{end}}
-
-Use "revel help [command]" for more information.
-`
-
-var helpTemplate = `usage: revel {{.UsageLine}}
-{{.Long}}
-`
-
-type Command struct {
-	Run                    func(args []string)
-	UsageLine, Short, Long string
-}
-
-var commands = []*Command{}
-
-func usage(exitCode int) {
-	tmpl(os.Stderr, usageTemplate, commands)
-	os.Exit(exitCode)
-}
-
-func tmpl(w io.Writer, text string, data interface{}) {
-	t := template.New("top")
-	template.Must(t.Parse(text))
-	if err := t.Execute(w, data); err != nil {
-		panic(err)
 	}
 }
