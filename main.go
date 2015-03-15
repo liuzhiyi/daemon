@@ -1,17 +1,22 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
+	"net"
 	"net/http"
 	"path"
+	"strings"
 	"time"
 
 	"github.com/kardianos/service"
+	"github.com/liuzhiyi/daemon/common"
+	"github.com/natefinch/npipe"
 )
 
 const (
@@ -46,6 +51,7 @@ func (p *program) Start(s service.Service) error {
 
 func (p *program) run(s service.Service) error {
 	logger.Infof("I'm running %v.", service.Platform())
+	// createPipeServer()
 	httpServer(s)
 	return nil
 }
@@ -82,6 +88,10 @@ type route struct {
 func (r *route) match(path string) bool {
 	fmt.Println(path, r.path)
 	return r.path == path
+}
+
+func (r *route) staticMatch(path string) bool {
+	return strings.HasPrefix(path, r.path)
 }
 
 type Router struct {
@@ -125,9 +135,16 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 	var handler http.Handler
 	for _, route := range r.routes {
+		if route.method == "static" {
+			if route.staticMatch(req.URL.Path) {
+				handler = route.fn
+				break
+			}
+		}
 		if req.Method == route.method {
 			if route.match(req.URL.Path) {
 				handler = route.fn
+				break
 			}
 		}
 	}
@@ -146,7 +163,10 @@ func createRouters(s service.Service) *Router {
 			"/reset": Reset,
 		},
 		"GET": {
-			"/welcome": Welcome,
+			"/version": Version,
+		},
+		"static": {
+			"/file": Static,
 		},
 	}
 
@@ -158,11 +178,19 @@ func createRouters(s service.Service) *Router {
 	return r
 }
 
-func Welcome(s service.Service, w http.ResponseWriter, req *http.Request, session *Session) {
-	var data Rsp
-	data.Code = "200"
-	data.Msg = "访问成功"
-	data.Object = "服务器版本：1.0，欢迎使用daemon服务。"
+func Static(s service.Service, w http.ResponseWriter, req *http.Request, session *Session) {
+	fmt.Println(http.Dir("./v1.0/file/"))
+	staticHandler := http.FileServer(http.Dir("./"))
+	staticHandler.ServeHTTP(w, req)
+	return
+
+}
+
+func Version(s service.Service, w http.ResponseWriter, req *http.Request, session *Session) {
+	data := make(map[string]string)
+	data["success"] = "true"
+	data["version"] = "1.0.0"
+	data["build"] = "13"
 	output(w, data)
 }
 
@@ -213,7 +241,7 @@ func decodeData(req *http.Request) (Rsp, map[string]string) {
 	return data, params
 }
 
-func output(w http.ResponseWriter, data Rsp) {
+func output(w http.ResponseWriter, data interface{}) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	if ss, err := json.Marshal(data); err != nil {
@@ -308,8 +336,16 @@ func main() {
 	if len(args) == 1 {
 		err := service.Control(s, args[0])
 		if err != nil {
-			log.Printf("Valid actions: %q\n", service.ControlAction)
-			log.Fatal(err)
+			if args[0] == service.ControlAction[0] {
+				s.Install()
+				s.Start()
+			} else if args[0] == service.ControlAction[0] {
+				s.Install()
+				s.Stop()
+			} else {
+				log.Printf("Valid actions: %q\n", service.ControlAction)
+				log.Fatal(err)
+			}
 		}
 		return
 	}
@@ -318,4 +354,34 @@ func main() {
 	if err != nil {
 		logger.Error(err)
 	}
+}
+
+func createPipeServer() {
+	ln, err := npipe.Listen(common.PipeAddr)
+	if err != nil {
+		log.Fatal(err.Error())
+	}
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				log.Print(err.Error())
+				continue
+			}
+
+			// handle connection like any other net.Conn
+			go func(conn net.Conn) {
+				defer conn.Close()
+				r := bufio.NewReader(conn)
+				msg, err := r.ReadString('\n')
+				if err != nil {
+					log.Print(err.Error())
+					return
+				}
+				fmt.Fprint(conn, "heeelo\n")
+				fmt.Println(msg)
+			}(conn)
+		}
+	}()
 }

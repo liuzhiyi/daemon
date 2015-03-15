@@ -1,22 +1,31 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
+	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"reflect"
 	"strings"
+	"time"
+
+	"github.com/kardianos/service"
+	"github.com/liuzhiyi/daemon/common"
 )
 
 const (
 	version string = "1.0"
 	proto   string = "tcp"
 	addr    string = "127.0.0.1:3000"
+	helper         = "./helper.exe"
+)
+
+var (
+	logger service.Logger
+	s      service.Service
 )
 
 type DaemonCli struct {
@@ -108,47 +117,106 @@ func main() {
 	if len(*flHost) == 0 {
 		*flHost = addr
 	}
+	svcConfig := &service.Config{
+		Name:        "tokentest",
+		DisplayName: "Api Service",
+		Description: "This is a Api Go service.",
+	}
+	prg := &program{}
+	var err error
+	s, err = service.New(prg, svcConfig)
+	if err != nil {
+		log.Fatal(err.Error())
+	}
+	errs := make(chan error, 5)
+	logger, err = s.Logger(errs)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	go func() {
+		for {
+			err := <-errs
+			if err != nil {
+				log.Print(err)
+			}
+		}
+	}()
+
 	cli := NewDaemonCli()
 	if *flTls {
 		cli.scheme = "https"
 	}
-	if err := cli.Cmd(flag.Args()...); err != nil {
-		fmt.Fprint(cli.err, err.Error())
-	}
-}
-
-type User struct {
-	Username string
-	Password string
-}
-
-func postToken(user User) {
-	if ss, err := json.Marshal(user); err != nil {
-		panic(err.Error())
-	} else {
-		r := bytes.NewReader(ss)
-		if rsp, err := http.Post("http://127.0.0.1:3000/token", "json", r); err == nil {
-			processResult(rsp)
-			rsp.Body.Close()
-		} else {
-			fmt.Println(err.Error())
+	if len(flag.Args()) > 0 {
+		if err := cli.Cmd(flag.Args()...); err != nil {
+			fmt.Fprint(cli.err, err.Error())
 		}
+		return
 	}
-}
 
-func processResult(rsp *http.Response) {
-	str, err := ioutil.ReadAll(rsp.Body)
+	err = s.Run()
 	if err != nil {
-		fmt.Println(err.Error())
-	} else {
-		fmt.Println(string(str))
+		logger.Error(err)
 	}
 }
 
-func getToken() {
-	rsp, err := http.Get("http://127.0.0.1:3000/token")
-	if err == nil {
-		processResult(rsp)
-		rsp.Body.Close()
+type program struct {
+	exit chan struct{}
+}
+
+func (p *program) Stop(s service.Service) error {
+	// Any work in Stop should be quick, usually a few seconds at most.
+	logger.Info("I'm Stopping!")
+	close(p.exit)
+	return nil
+}
+
+func (p *program) Start(s service.Service) error {
+	p.exit = make(chan struct{})
+	p.run(s)
+	return nil
+}
+
+func (p *program) run(s service.Service) error {
+	checkHelper()
+	common.Timer(60*time.Second, checkHelper)
+	return nil
+}
+
+func checkHelper() {
+	if !common.IsRunning(helper) {
+		startMaster()
+	}
+}
+
+func startMaster() error {
+	return exec.Command(helper, "start").Start()
+}
+
+func (c *DaemonCli) CmdInstall(args ...string) error {
+	return s.Install()
+}
+
+func (c *DaemonCli) CmdUninstall(args ...string) error {
+	return s.Uninstall()
+}
+
+func (c *DaemonCli) CmdStart(args ...string) error {
+	if err := s.Start(); err != nil {
+		s.Install()
+		return s.Start()
+	} else {
+		return nil
+	}
+
+}
+
+func (c *DaemonCli) CmdStop(args ...string) error {
+
+	if err := s.Stop(); err != nil {
+		s.Install()
+		return s.Stop()
+	} else {
+		return nil
 	}
 }

@@ -175,6 +175,6 @@ func (c *DaemonCli) CmdReset(args ...string) error {
 	return c.stream("POST", "/reset", in, c.out, c.err, nil)
 }
 
-func (c *DaemonCli) CmdWelcome(args ...string) error {
-	return c.stream("GET", "/welcome", nil, c.out, c.err, nil)
+func (c *DaemonCli) CmdVersion(args ...string) error {
+	return c.stream("GET", "/version", nil, c.out, c.err, nil)
 }
