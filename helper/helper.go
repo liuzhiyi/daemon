@@ -31,7 +31,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"syscall"
+	//"syscall"
 	"time"
 
 	"github.com/kardianos/service"
