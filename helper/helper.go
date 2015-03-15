@@ -81,15 +81,11 @@ func (p *program) run(s service.Service) error {
 }
 
 func main() {
-	hd, err := common.CreateSema(0, 1, syscall.StringToUTF16Ptr("streamSemaphore"))
-	if err != nil {
-		fmt.Println(err.Error)
-	}
-	fmt.Println(hd)
-	hd, err = common.CreateSema(0, 1, syscall.StringToUTF16Ptr("streamSemaphore"))
-	fmt.Println(common.GetLastError())
-	os.Exit(1)
-	defer syscall.Close(hd)
+	// // hd, err := common.CreateSema(0, 1, syscall.StringToUTF16Ptr("streamSemaphore"))
+	// // if err != nil {
+	// // 	fmt.Println(err.Error)
+	// // }
+	// defer syscall.Close(hd)
 	flag.Parse()
 	svcConfig := &service.Config{
 		Name:        "helper",
