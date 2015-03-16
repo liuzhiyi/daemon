@@ -7,17 +7,18 @@ package main
 #include <stdlib.h>
 #include <Windows.h>
 
+HANDLE sema;
+
 void singleProc() {
-	HANDLE sema;
-	sema = CreateSemaphore(NULL, 1, 1, (LPCWSTR)"flagSingle");
-	CloseHandle(sema);
+
+	sema = CreateSemaphoreA(NULL, 1, 1, (LPCSTR)"flagSingle");
 	if (GetLastError() == 183) {
 		printf("进程已经运行");
 		exit(0);
 	}
 }
 */
-//import "C"
+import "C"
 
 import (
 	"bytes"
@@ -81,6 +82,8 @@ func (p *program) run(s service.Service) error {
 }
 
 func main() {
+	defer C.CloseHandle(C.sema)
+	C.singleProc()
 	// // hd, err := common.CreateSema(0, 1, syscall.StringToUTF16Ptr("streamSemaphore"))
 	// // if err != nil {
 	// // 	fmt.Println(err.Error)
