@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kardianos/osext"
 	"github.com/kardianos/service"
 	"github.com/liuzhiyi/daemon/common"
 )
@@ -20,7 +21,7 @@ const (
 	version string = "1.0"
 	proto   string = "tcp"
 	addr    string = "127.0.0.1:3000"
-	helper         = "./helper.exe"
+	helper         = "helper.exe"
 )
 
 var (
@@ -153,7 +154,6 @@ func main() {
 		}
 		return
 	}
-
 	err = s.Run()
 	if err != nil {
 		logger.Error(err)
@@ -185,12 +185,14 @@ func (p *program) run(s service.Service) error {
 
 func checkHelper() {
 	if !common.IsRunning(helper) {
-		startMaster()
+		startHelper()
 	}
 }
 
-func startMaster() error {
-	return exec.Command(helper, "start").Start()
+func startHelper() error {
+	cmd := exec.Command(helper, "start")
+	cmd.Dir, _ = osext.ExecutableFolder()
+	return cmd.Start()
 }
 
 func (c *DaemonCli) CmdInstall(args ...string) error {

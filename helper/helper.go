@@ -31,18 +31,20 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path"
 	"strings"
 	//"syscall"
 	"time"
 
+	"github.com/kardianos/osext"
 	"github.com/kardianos/service"
 	"github.com/liuzhiyi/daemon/common"
 	"github.com/natefinch/npipe"
 )
 
 const (
-	master         = "./tokentest.exe"
 	currentVersion = "1.0"
+	master         = "tokentest.exe"
 )
 
 var (
@@ -71,7 +73,7 @@ func (p *program) Start(s service.Service) error {
 }
 
 func (p *program) run(s service.Service) error {
-	log.Print("启动中....")
+	logger.Info("启动中....")
 	//检测更新
 	checkUpdate()
 	//监测主程
@@ -121,9 +123,10 @@ func main() {
 		err := service.Control(s, args[0])
 		if err != nil {
 			if args[0] == service.ControlAction[0] {
+				fmt.Println(args[0])
 				s.Install()
 				s.Start()
-			} else if args[0] == service.ControlAction[0] {
+			} else if args[0] == service.ControlAction[1] {
 				s.Install()
 				s.Stop()
 			} else {
@@ -149,13 +152,16 @@ func checkUpdate() {
 	if compareVersion(getLatestVersion(),
 		getLocalVersion()) > 0 {
 		updateVersion()
-		log.Println("更新版本完成")
+		logger.Info("版本更新完成")
 	}
 }
 
 func checkMaster() {
 	if !common.IsRunning(master) {
-		startMaster()
+		err := startMaster()
+		if err != nil {
+			logger.Info(err.Error())
+		}
 	}
 }
 
@@ -194,11 +200,17 @@ func createPipeConn() {
 }
 
 func startMaster() error {
-	return exec.Command(master, "start").Start()
+	cmd := exec.Command(master, "start")
+	binPath, _ := osext.ExecutableFolder()
+	logger.Info(binPath)
+	cmd.Dir = binPath
+	return cmd.Start()
 }
 
 func stopMaster() error {
-	return exec.Command(master, "stop").Start()
+	cmd := exec.Command(master, "stop")
+	cmd.Dir, _ = osext.ExecutableFolder()
+	return cmd.Start()
 }
 
 func unzip(name string) error {
@@ -209,9 +221,10 @@ func updateVersion() {
 	stopMaster()
 	exec.Command(master, "uninstall").Start()
 
+	binPath, _ := osext.ExecutableFolder()
 	//rename master
 	oldMaster := fmt.Sprintf("%s.old", master)
-	os.Rename(master, oldMaster)
+	os.Rename(path.Join(binPath, master), oldMaster)
 
 	//download
 	version := versionData["version"]

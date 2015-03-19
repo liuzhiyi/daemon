@@ -339,7 +339,7 @@ func main() {
 			if args[0] == service.ControlAction[0] {
 				s.Install()
 				s.Start()
-			} else if args[0] == service.ControlAction[0] {
+			} else if args[0] == service.ControlAction[1] {
 				s.Install()
 				s.Stop()
 			} else {
